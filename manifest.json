@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.camerontucker.anker-c200",
+  "name": "Anker C200 Controls",
+  "version": "1.2.0",
+  "author": "Cam Tucker",
+  "license": "MIT",
+  "description": "Tune an Anker PowerConf C200, verify its live hardware state, and frame its OBS output from the Omarchy bar",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Anker C200",
+    "description": "Verify Anker hardware settings and adjust OBS meeting framing",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
