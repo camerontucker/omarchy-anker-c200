@@ -2,13 +2,11 @@
 
 This draft follows the marketplace's current
 [submission guide](https://github.com/omacom/omarchy-plugin-marketplace/blob/main/SUBMISSION.md).
-Do not create the issue until the repository is public at the URL below, the
-owner reviews the final commit, confirms all five checklist statements, and
-explicitly approves this title and body.
+The public repository, final commit, checklist statements, title, and body were
+reviewed and approved by the owner on 2026-09-03.
 
 The checked boxes inside the issue-body template are the exact final format
-required by the marketplace. They are not an ownership or publication
-attestation until the owner completes the unchecked preflight items below.
+required by the marketplace and reflect the owner's submission attestation.
 
 ## Issue title
 
@@ -71,7 +69,7 @@ gh issue create \
 - [x] Validate the source and installed plugin with `omarchy plugin validate`.
 - [x] Run unit tests, Python compilation, and local QML lint against the Omarchy
   shell imports.
-- [ ] Publish the repository at the exact root URL in the draft.
+- [x] Publish the repository at the exact root URL in the draft.
 - [x] Add an authentic, privacy-safe root `preview.png` under 50 MB and 40
   megapixels, using the real plugin UI with a synthetic OBS meeting scene.
 - [x] Add a second sanitized framing screenshot and document preview-asset
@@ -83,8 +81,8 @@ gh issue create \
   first-run build in the README, security boundary, and submission notes.
 - [x] Confirm `manifest.json`, `CHANGELOG.md`, and release tests carry version
   `1.2.0` and plugin ID `io.github.camerontucker.anker-c200`.
-- [ ] Run `./tests/run` from a fresh clone of the final commit.
+- [x] Run `./tests/run` from a fresh clone of the final commit.
 - [x] Confirm the permanent plugin ID is still absent from the marketplace
   registry (checked 2026-09-03).
-- [ ] Review every checklist statement and approve the exact title and body
+- [x] Review every checklist statement and approve the exact title and body
   before creating the submission issue.
