@@ -2,6 +2,8 @@
 
 ## 1.2.0 — 2026-09-03
 
+- Remove `AGENTS.md` from the installable repository and add a release check
+  rejecting root or nested agent instruction files, including override variants.
 - Show the C200's live chosen temperature while auto white balance is enabled,
   exclude that inactive manual control from profile drift, and restore the
   saved manual temperature when auto mode is disabled.

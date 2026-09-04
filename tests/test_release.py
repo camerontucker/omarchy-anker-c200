@@ -32,7 +32,6 @@ class ReleaseContractTests(unittest.TestCase):
 
     def test_required_release_files_exist(self):
         for relative_path in (
-            "AGENTS.md",
             "CHANGELOG.md",
             ".github/workflows/ci.yml",
             "LICENSE",
@@ -65,6 +64,17 @@ class ReleaseContractTests(unittest.TestCase):
         ):
             with self.subTest(path=relative_path):
                 self.assertTrue((REPOSITORY / relative_path).is_file())
+
+    def test_payload_excludes_agent_instructions(self):
+        # Omarchy installs the entire repository, not just manifest entry points.
+        forbidden_names = {"agents.md", "agents.override.md"}
+        instruction_paths = sorted(
+            str(path.relative_to(REPOSITORY))
+            for path in REPOSITORY.rglob("*")
+            if ".git" not in path.relative_to(REPOSITORY).parts
+            and path.name.casefold() in forbidden_names
+        )
+        self.assertEqual(instruction_paths, [], "Agent instructions must not ship")
 
     def test_readme_covers_marketplace_lifecycle_and_dependencies(self):
         readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
