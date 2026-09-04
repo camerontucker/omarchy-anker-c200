@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.1 — 2026-09-03
+
+- Bind helpers to system executables and execute only the digest-validated
+  bundled controller through a sealed descriptor; remove external overrides.
+- Harden settings, cache, build, and OBS credential access with descriptor-based
+  ownership/type/mode/size validation and private atomic publication.
+- Bound producer and consumer bytes, JSON shapes, process enumeration, and
+  absolute request time; supervise helper groups through TERM/KILL and reaping,
+  including component destruction and launcher death.
+- Validate UI data and render external strings as plain text.
+
 ## 1.2.0 — 2026-09-03
 
 - Remove `AGENTS.md` from the installable repository and add a release check

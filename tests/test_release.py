@@ -19,7 +19,7 @@ class ReleaseContractTests(unittest.TestCase):
         manifest = self.manifest
         self.assertEqual(manifest["schemaVersion"], 1)
         self.assertEqual(manifest["id"], "io.github.camerontucker.anker-c200")
-        self.assertEqual(manifest["version"], "1.2.0")
+        self.assertEqual(manifest["version"], "1.2.1")
         self.assertEqual(manifest["license"], "MIT")
         self.assertEqual(manifest["kinds"], ["bar-widget"])
         self.assertEqual(manifest["entryPoints"], {"barWidget": "Panel.qml"})
@@ -36,6 +36,12 @@ class ReleaseContractTests(unittest.TestCase):
             ".github/workflows/ci.yml",
             "LICENSE",
             "Panel.qml",
+            "BoundedProcess.qml",
+            "Schema.js",
+            "runtime_guard.py",
+            "secure_io.py",
+            "tests/test_security.py",
+            "tests/ProcessHarness.qml",
             "README.md",
             "SECURITY.md",
             "THIRD_PARTY_NOTICES.md",
@@ -92,7 +98,7 @@ class ReleaseContractTests(unittest.TestCase):
             "Quickshell",
             "OBS Studio",
             "That is the complete required setup",
-            "$XDG_CACHE_HOME/anker-c200/bin/anker-c200",
+            "$XDG_CACHE_HOME/anker-c200",
         ):
             with self.subTest(text=text):
                 self.assertIn(text, readme)
@@ -132,9 +138,9 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("previewActive = false", qml)
         self.assertIn("preventStealing: true", qml)
         self.assertIn("onCanceled: root.flushPan()", qml)
-        self.assertIn('["python3", root.obsBackend, "serve"]', qml)
+        self.assertIn('root.helperCommand("obs", ["serve"])', qml)
         self.assertIn("stdinEnabled: true", qml)
-        self.assertIn("stdout: SplitParser", qml)
+        self.assertIn("BoundedProcess {", qml)
         self.assertIn("interval: 24", qml)
         self.assertIn("property bool framingBusy: false", qml)
         self.assertIn("DIRECT PREVIEW · START OBS TO REFRAME", qml)
@@ -158,7 +164,7 @@ class ReleaseContractTests(unittest.TestCase):
         )
         self.assertGreaterEqual(qml.count("busy: actionProc.running"), 2)
         self.assertIn('label: root.autoWhiteBalance ? "TEMPERATURE · AUTO" : "TEMPERATURE"', qml)
-        self.assertIn('["python3", root.backend, "read", "white_balance_temperature"]', qml)
+        self.assertIn('root.helperCommand("backend", ["read", "white_balance_temperature"])', qml)
         self.assertIn("running: root.opened && root.connected && root.autoWhiteBalance", qml)
         self.assertIn("if (stateProc.running) stateProc.running = false", qml)
         self.assertLess(qml.index('label: "ZOOM"'), qml.index('text: "FIELD OF VIEW"'))
@@ -168,8 +174,8 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn('"controller_available": controller_available()', backend)
         self.assertIn("ensure_controller()", backend)
         self.assertIn("controller_fingerprint()", backend)
-        self.assertIn('shutil.which("cc")', backend)
-        self.assertIn("temporary.replace(CACHE_CONTROL)", backend)
+        self.assertIn('run_bounded(["/usr/bin/cc"', backend)
+        self.assertIn("CONTROL_FD = sealed_executable(data)", backend)
         self.assertIn('"obs_running": process_running("obs")', backend)
         self.assertIn('"profile_drift": drift', backend)
         self.assertIn('"busy_processes": holders', backend)
@@ -224,8 +230,10 @@ class ReleaseContractTests(unittest.TestCase):
             "subprocess",
             "sys",
             "uuid",
+            "contextlib", "ctypes", "fcntl", "math", "secrets", "selectors", "signal", "stat", "time",
+            "secure_io", "runtime_guard", "anker_c200_backend", "obs_control",
         }
-        for filename in ("anker_c200_backend.py", "obs_control.py"):
+        for filename in ("anker_c200_backend.py", "obs_control.py", "runtime_guard.py", "secure_io.py"):
             tree = ast.parse((REPOSITORY / filename).read_text(encoding="utf-8"))
             imported = set()
             for node in ast.walk(tree):

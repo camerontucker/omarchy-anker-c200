@@ -1,4 +1,5 @@
 import subprocess
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,28 +12,22 @@ class BackendTests(unittest.TestCase):
     def test_bundled_controller_is_built_atomically_and_reused(self):
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory)
-            binary = cache / "bin" / "anker-c200"
-            stamp = cache / "controller-source.sha256"
-
-            def compile_controller(arguments, **_kwargs):
-                output = Path(arguments[arguments.index("-o") + 1])
-                output.write_bytes(b"controller")
-                return subprocess.CompletedProcess(arguments, 0, stdout="", stderr="")
+            stamp = cache / "controller-v2.json"
 
             with (
-                patch.object(backend, "CACHE_CONTROL", binary),
+                patch.object(backend, "CACHE", cache),
                 patch.object(backend, "CACHE_STAMP", stamp),
-                patch.object(backend, "CONTROL", cache / "missing"),
-                patch.object(backend, "external_controller", return_value=None),
-                patch.object(backend.shutil, "which", return_value="/usr/bin/cc"),
-                patch.object(backend.subprocess, "run", side_effect=compile_controller) as run,
+                patch.object(backend, "CONTROL_FD", None),
+                patch.object(backend, "run_bounded", wraps=backend.run_bounded) as run,
             ):
                 self.assertTrue(backend.ensure_controller())
-                self.assertEqual(backend.CONTROL, binary)
-                self.assertTrue(binary.is_file())
+                self.assertIsNotNone(backend.CONTROL_FD)
                 self.assertTrue(stamp.is_file())
+                os.close(backend.CONTROL_FD)
+                backend.CONTROL_FD = None
                 self.assertTrue(backend.ensure_controller())
                 self.assertEqual(run.call_count, 1)
+                os.close(backend.CONTROL_FD)
 
     def test_control_value_parses_controller_output(self):
         self.assertEqual(backend.control_value("fov", "65 (narrow)\n"), "narrow")
@@ -88,7 +83,7 @@ class BackendTests(unittest.TestCase):
         )
 
     @patch.object(backend, "V4L2_CONTROL", "/usr/bin/v4l2-ctl")
-    @patch.object(backend.subprocess, "run")
+    @patch.object(backend, "run_bounded")
     def test_driver_defaults_come_from_v4l2(self, run):
         run.return_value = subprocess.CompletedProcess(
             [],
@@ -184,9 +179,8 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(state["profile_drift"], [])
         self.assertTrue(state["profile_applied"])
 
-    @patch.object(backend, "CONFIG")
-    def test_load_ignores_removed_or_unknown_saved_controls(self, config):
-        config.read_text.return_value = '{"hdr": false, "brightness": 61, "future": 9}'
+    @patch.object(backend, "read_file", return_value=b'{"hdr": false, "brightness": 61, "future": 9}')
+    def test_load_ignores_removed_or_unknown_saved_controls(self, _read):
 
         values = backend.load()
 

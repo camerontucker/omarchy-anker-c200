@@ -5,7 +5,7 @@ repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_dir"
 
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
-PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile anker_c200_backend.py obs_control.py
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile anker_c200_backend.py obs_control.py runtime_guard.py secure_io.py
 build_root=$(mktemp -d /tmp/anker-c200-controller.XXXXXX)
 cleanup_build() {
   find "$build_root" -depth -mindepth 1 -delete
@@ -38,7 +38,7 @@ if [[ -n "$qml_lint" && -d "${OMARCHY_PATH:-/usr/share/omarchy}/shell" ]]; then
   }
   trap 'cleanup_lint; cleanup_build' EXIT
   ln -s "${OMARCHY_PATH:-/usr/share/omarchy}/shell" "$lint_root/qs"
-  "$qml_lint" -I "$lint_root" Panel.qml >/dev/null 2>&1
+  "$qml_lint" -I "$lint_root" Panel.qml BoundedProcess.qml >/dev/null 2>&1
   cleanup_lint
   trap cleanup_build EXIT
 fi

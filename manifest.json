@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.camerontucker.anker-c200",
   "name": "Anker C200 Controls",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "Cam Tucker",
   "license": "MIT",
   "description": "Tune an Anker PowerConf C200, verify its live hardware state, and frame its OBS output from the Omarchy bar",

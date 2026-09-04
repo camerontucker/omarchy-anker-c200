@@ -18,4 +18,4 @@ jobs:
       - name: Run unit and release-contract tests
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
-          PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile anker_c200_backend.py obs_control.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile anker_c200_backend.py obs_control.py runtime_guard.py secure_io.py

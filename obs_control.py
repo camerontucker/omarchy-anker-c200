@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Small stdlib-only OBS WebSocket bridge for camera framing."""
 
 from __future__ import annotations
@@ -6,12 +6,18 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
 import socket
 import struct
 import sys
+import time
 import uuid
 from pathlib import Path
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from secure_io import UnsafeInput, read_file, json_object
 
 
 CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -19,18 +25,70 @@ OBS_CONFIG = CONFIG_HOME / "obs-studio/plugin_config/obs-websocket/config.json"
 HOST = "127.0.0.1"
 DEFAULT_PORT = 4455
 WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-MAX_MESSAGE_BYTES = 1024 * 1024
+MAX_MESSAGE_BYTES = 131072
 
 
 class ObsError(RuntimeError):
     pass
 
 
+def number(value, low=0, high=32768, integer=False):
+    if type(value) not in {int, float} or not math.isfinite(value) or not low <= value <= high:
+        raise ObsError("invalid OBS numeric field")
+    if integer and int(value) != value:
+        raise ObsError("OBS integer required")
+    return int(value) if integer else value
+
+
+def text(value, maximum=256):
+    if type(value) is not str or len(value) > maximum or any(ord(c) < 32 for c in value):
+        raise ObsError("invalid OBS text field")
+    return value
+
+
+def object_value(value):
+    if type(value) is not dict or len(value) > 128:
+        raise ObsError("invalid OBS object field")
+    return value
+
+
+def transform_value(value):
+    value = object_value(value)
+    for name in ("cropLeft", "cropRight", "cropTop", "cropBottom", "sourceWidth", "sourceHeight"):
+        number(value.get(name, 0))
+    return value
+
+
 class WebSocket:
     def __init__(self, port: int) -> None:
+        self.deadline = time.monotonic() + 4
+        self.frames = 0
         self.sock = socket.create_connection((HOST, port), timeout=1.5)
-        self.sock.settimeout(1.5)
         self.buffer = b""
+        try:
+            self._handshake(port)
+        except BaseException:
+            self.sock.close()
+            raise
+
+    def _timeout(self):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise ObsError("OBS request deadline exceeded")
+        self.sock.settimeout(min(1.5, remaining))
+
+    def _recv(self, count):
+        self._timeout()
+        data = self.sock.recv(count)
+        if not data:
+            raise ObsError("OBS closed the connection")
+        return data
+
+    def _send(self, data):
+        self._timeout()
+        self.sock.sendall(data)
+
+    def _handshake(self, port):
         key = base64.b64encode(os.urandom(16)).decode()
         request = (
             "GET / HTTP/1.1\r\n"
@@ -40,10 +98,10 @@ class WebSocket:
             f"Sec-WebSocket-Key: {key}\r\n"
             "Sec-WebSocket-Version: 13\r\n\r\n"
         ).encode()
-        self.sock.sendall(request)
+        self._send(request)
         response = b""
         while b"\r\n\r\n" not in response:
-            response += self.sock.recv(4096)
+            response += self._recv(4096)
             if len(response) > 32768:
                 raise ObsError("invalid OBS WebSocket handshake")
         headers, self.buffer = response.split(b"\r\n\r\n", 1)
@@ -63,7 +121,7 @@ class WebSocket:
 
     def _read(self, count: int) -> bytes:
         while len(self.buffer) < count:
-            chunk = self.sock.recv(4096)
+            chunk = self._recv(min(4096, count - len(self.buffer)))
             if not chunk:
                 raise ObsError("OBS closed the connection")
             self.buffer += chunk
@@ -72,6 +130,8 @@ class WebSocket:
 
     def send(self, payload: dict) -> None:
         data = json.dumps(payload, separators=(",", ":")).encode()
+        if len(data) > MAX_MESSAGE_BYTES:
+            raise ObsError("OBS request byte limit exceeded")
         mask = os.urandom(4)
         length = len(data)
         if length < 126:
@@ -81,11 +141,16 @@ class WebSocket:
         else:
             header = bytes((0x81, 0xFF)) + struct.pack("!Q", length)
         masked = bytes(value ^ mask[index % 4] for index, value in enumerate(data))
-        self.sock.sendall(header + mask + masked)
+        self._send(header + mask + masked)
 
     def receive(self) -> dict:
         while True:
+            self.frames += 1
+            if self.frames > 64:
+                raise ObsError("OBS frame budget exceeded")
             first, second = self._read(2)
+            if first & 0x70 or not first & 0x80 or second & 0x80:
+                raise ObsError("unsupported OBS frame encoding")
             opcode = first & 0x0F
             length = second & 0x7F
             if length == 126:
@@ -101,15 +166,18 @@ class WebSocket:
             if opcode == 0x8:
                 raise ObsError("OBS closed the connection")
             if opcode == 0x9:
+                if length > 125:
+                    raise ObsError("invalid OBS ping")
                 self._send_control(0xA, payload)
                 continue
             if opcode == 0x1:
-                return json.loads(payload)
+                return json_object(payload, MAX_MESSAGE_BYTES)
+            raise ObsError("unsupported OBS frame opcode")
 
     def _send_control(self, opcode: int, data: bytes) -> None:
         mask = os.urandom(4)
         masked = bytes(value ^ mask[index % 4] for index, value in enumerate(data))
-        self.sock.sendall(bytes((0x80 | opcode, 0x80 | len(data))) + mask + masked)
+        self._send(bytes((0x80 | opcode, 0x80 | len(data))) + mask + masked)
 
     def close(self) -> None:
         self.sock.close()
@@ -118,28 +186,41 @@ class WebSocket:
 class Obs:
     def __init__(self) -> None:
         try:
-            config = json.loads(OBS_CONFIG.read_text())
-        except (OSError, json.JSONDecodeError):
+            config = json_object(read_file(OBS_CONFIG, 8192, secret=True), 8192)
+        except FileNotFoundError:
             config = {}
-        port = int(config.get("server_port", DEFAULT_PORT))
-        if port < 1 or port > 65535:
-            raise ObsError("invalid OBS WebSocket port")
+        if len(config) > 16:
+            raise ObsError("invalid OBS credential configuration")
+        for name in ("alerts_enabled", "auth_required", "first_load", "server_enabled"):
+            if name in config and type(config[name]) is not bool:
+                raise ObsError("invalid OBS configuration boolean")
+        if "server_password" in config:
+            text(config["server_password"], 256)
+        port = number(config.get("server_port", DEFAULT_PORT), 1, 65535, True)
         self.ws = WebSocket(port)
+        try:
+            self._identify(config)
+        except BaseException:
+            self.ws.close()
+            raise
+
+    def _identify(self, config):
         hello = self.ws.receive()
         if hello.get("op") != 0:
             raise ObsError("unexpected response from OBS")
         identification: dict = {"rpcVersion": 1}
-        authentication = hello.get("d", {}).get("authentication")
+        authentication = object_value(hello.get("d", {})).get("authentication")
         if authentication:
+            authentication = object_value(authentication)
             try:
-                password = str(config["server_password"])
+                password = text(config["server_password"], 256)
             except KeyError as exc:
                 raise ObsError("could not read the OBS WebSocket password") from exc
             secret = base64.b64encode(
-                hashlib.sha256((password + authentication["salt"]).encode()).digest()
+                hashlib.sha256((password + text(authentication["salt"])).encode()).digest()
             ).decode()
             identification["authentication"] = base64.b64encode(
-                hashlib.sha256((secret + authentication["challenge"]).encode()).digest()
+                hashlib.sha256((secret + text(authentication["challenge"])).encode()).digest()
             ).decode()
         self.ws.send({"op": 1, "d": identification})
         identified = self.ws.receive()
@@ -147,6 +228,8 @@ class Obs:
             raise ObsError("OBS WebSocket authentication failed")
 
     def request(self, request_type: str, request_data: dict | None = None) -> dict:
+        self.ws.deadline = time.monotonic() + 4
+        self.ws.frames = 0
         request_id = str(uuid.uuid4())
         self.ws.send(
             {
@@ -160,17 +243,23 @@ class Obs:
         )
         while True:
             response = self.ws.receive()
-            data = response.get("d", {})
+            data = object_value(response.get("d", {}))
             if response.get("op") != 7 or data.get("requestId") != request_id:
                 continue
-            status = data.get("requestStatus", {})
-            if not status.get("result"):
-                raise ObsError(status.get("comment") or f"OBS request {request_type} failed")
-            return data.get("responseData", {})
+            status = object_value(data.get("requestStatus", {}))
+            if status.get("result") is not True:
+                raise ObsError("OBS request failed")
+            return object_value(data.get("responseData", {}))
 
     def camera_item(self) -> tuple[str, int, str]:
-        scene = self.request("GetCurrentProgramScene")["currentProgramSceneName"]
+        scene = text(self.request("GetCurrentProgramScene")["currentProgramSceneName"])
         items = self.request("GetSceneItemList", {"sceneName": scene}).get("sceneItems", [])
+        if type(items) is not list or len(items) > 128:
+            raise ObsError("OBS scene item limit exceeded")
+        for item in items:
+            object_value(item)
+            text(item.get("sourceName", ""))
+            number(item.get("sceneItemId"), 0, 2147483647, True)
         candidates = [
             item
             for item in items
@@ -180,14 +269,15 @@ class Obs:
         if not candidates:
             raise ObsError("Anker camera source is not in the current OBS scene")
         item = candidates[0]
-        return scene, int(item["sceneItemId"]), str(item["sourceName"])
+        return scene, item["sceneItemId"], item["sourceName"]
 
     def transform(self, scene: str, item_id: int) -> dict:
-        return self.request(
+        return transform_value(self.request(
             "GetSceneItemTransform", {"sceneName": scene, "sceneItemId": item_id}
-        )["sceneItemTransform"]
+        )["sceneItemTransform"])
 
     def set_crop(self, scene: str, item_id: int, crop: dict) -> None:
+        transform_value(crop)
         self.request(
             "SetSceneItemTransform",
             {
@@ -205,8 +295,11 @@ def rounded_pair(total: int) -> tuple[int, int]:
 
 def pan_crop(transform: dict, dx: float, dy: float, width: float, height: float) -> dict:
     """Map one preview-sized gesture to the complete movable crop range."""
-    if width <= 0 or height <= 0:
-        raise ObsError("invalid preview size")
+    transform_value(transform)
+    number(dx, -32768, 32768)
+    number(dy, -32768, 32768)
+    number(width, 1, 32768)
+    number(height, 1, 32768)
     left = int(round(transform.get("cropLeft", 0)))
     right = int(round(transform.get("cropRight", 0)))
     top = int(round(transform.get("cropTop", 0)))
@@ -232,8 +325,19 @@ def status_payload(
 ) -> dict:
     video = obs.request("GetVideoSettings")
     virtual_camera = obs.request("GetVirtualCamStatus")
+    transform_value(transform)
+    text(scene)
+    text(source_name)
+    number(item_id, 0, 2147483647, True)
+    for key in ("outputWidth", "outputHeight", "baseWidth", "baseHeight"):
+        number(video.get(key, 0), integer=True)
+    number(video.get("fpsNumerator", 0), 0, 1000000, True)
+    number(video.get("fpsDenominator", 1), 1, 1000000, True)
+    if type(virtual_camera.get("outputActive")) is not bool:
+        raise ObsError("invalid OBS virtual camera state")
     numerator = int(video.get("fpsNumerator", 0))
     denominator = int(video.get("fpsDenominator", 1)) or 1
+    number(numerator / denominator, 0, 1000)
     return {
         "connected": True,
         "scene": scene,
@@ -259,15 +363,13 @@ class FramingSession:
 
     def __init__(self, obs: Obs | None = None) -> None:
         self.obs = obs or Obs()
-        self.scene, self.item_id, self.source_name = self.obs.camera_item()
-        self.transform = self.obs.transform(self.scene, self.item_id)
-        self.payload = status_payload(
-            self.obs,
-            self.scene,
-            self.item_id,
-            self.source_name,
-            self.transform,
-        )
+        try:
+            self.scene, self.item_id, self.source_name = self.obs.camera_item()
+            self.transform = self.obs.transform(self.scene, self.item_id)
+            self.payload = status_payload(self.obs, self.scene, self.item_id, self.source_name, self.transform)
+        except BaseException:
+            self.obs.ws.close()
+            raise
 
     def _update_crop_payload(self) -> None:
         self.payload.update(
@@ -280,6 +382,10 @@ class FramingSession:
         )
 
     def handle(self, command: str, arguments: list) -> dict:
+        if type(arguments) is not list or len(arguments) > 4:
+            raise ObsError("invalid framing argument array")
+        if command in {"state", "center"} and arguments:
+            raise ObsError("unexpected framing arguments")
         if command == "state":
             self.transform = self.obs.transform(self.scene, self.item_id)
             self._update_crop_payload()
@@ -288,7 +394,7 @@ class FramingSession:
         if command == "pan":
             if len(arguments) != 4:
                 raise ObsError("pan requires DX DY WIDTH HEIGHT")
-            dx, dy, width, height = map(float, arguments)
+            dx, dy, width, height = arguments
             crop = pan_crop(self.transform, dx, dy, width, height)
         elif command == "center":
             left = int(round(self.transform.get("cropLeft", 0)))
@@ -358,15 +464,23 @@ def serve() -> int:
             session = FramingSession()
             print(json.dumps(session.payload, separators=(",", ":")), flush=True)
         except (ObsError, OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
-            print(json.dumps({"connected": False, "error": str(exc)}, separators=(",", ":")), flush=True)
+            print(json.dumps({"connected": False, "error": "OBS control unavailable"}, separators=(",", ":")), flush=True)
 
-        for line in sys.stdin:
+        while True:
+            line = sys.stdin.buffer.readline(1025)
+            if not line:
+                break
+            if len(line) > 1024 or not line.endswith(b"\n"):
+                raise UnsafeInput("framing input limit exceeded")
             sequence = None
             try:
-                request = json.loads(line)
+                request = json_object(line, 1024)
                 if not isinstance(request, dict):
                     raise ValueError("framing request must be an object")
                 sequence = request.get("sequence")
+                number(sequence, 0, 2147483647, True)
+                if set(request) != {"sequence", "command", "arguments"} or request["command"] not in {"state", "pan", "center"}:
+                    raise UnsafeInput("invalid framing request schema")
                 if session is None:
                     session = FramingSession()
                 response = session.handle(
@@ -382,7 +496,7 @@ def serve() -> int:
                     except OSError:
                         pass
                     session = None
-                response = {"connected": False, "error": str(exc)}
+                response = {"connected": False, "error": "OBS control unavailable"}
                 if sequence is not None:
                     response["sequence"] = sequence
             print(json.dumps(response, separators=(",", ":")), flush=True)
@@ -400,9 +514,10 @@ def main() -> int:
         print(json.dumps(framing(command, sys.argv[2:]), separators=(",", ":")))
         return 0
     except (ObsError, OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
-        print(json.dumps({"connected": False, "error": str(exc)}, separators=(",", ":")))
+        print(json.dumps({"connected": False, "error": "OBS control unavailable"}, separators=(",", ":")))
         return 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from runtime_guard import guarded_launch
+    raise SystemExit(guarded_launch("obs", sys.argv[1:]))

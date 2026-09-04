@@ -43,6 +43,8 @@ Upstream roles, acknowledgements, and licenses for Omarchy, anker-powerconf-c200
 
 The plugin does not invoke a package manager, create services, modify OBS settings, request privilege escalation, or download and execute code. Its only first-run setup is compiling the bundled controller source into the user's cache. It has no telemetry or non-loopback network access. Capture is active only while the panel is open, and the camera object is destroyed when the panel closes.
 
+Version 1.2.1 removes external-controller overrides, binds execution to system executables and a sealed validated controller artifact, validates mutable files through directory descriptors, and adds bounded supervised helper I/O, absolute deadlines, process-tree cleanup, strict UI schemas, and plain-text rendering. The scoped remediation and test evidence are documented in docs/SECURITY_VERIFICATION.md.
+
 ### Submission checklist
 
 - [x] The repository is public and contains installation and removal instructions.
@@ -80,7 +82,7 @@ gh issue create \
 - [x] Pin and vendor the controller source and license; disclose its local
   first-run build in the README, security boundary, and submission notes.
 - [x] Confirm `manifest.json`, `CHANGELOG.md`, and release tests carry version
-  `1.2.0` and plugin ID `io.github.camerontucker.anker-c200`.
+  `1.2.1` and plugin ID `io.github.camerontucker.anker-c200`.
 - [x] Run `./tests/run` from a fresh clone of the final commit.
 - [x] Confirm the permanent plugin ID is still absent from the marketplace
   registry (checked 2026-09-03).

@@ -8,6 +8,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "Schema.js" as Schema
 
 Panel {
   id: root
@@ -19,6 +20,10 @@ Panel {
 
   readonly property string backend: Qt.resolvedUrl("anker_c200_backend.py").toString().replace("file://", "")
   readonly property string obsBackend: Qt.resolvedUrl("obs_control.py").toString().replace("file://", "")
+  readonly property string supervisor: Qt.resolvedUrl("runtime_guard.py").toString().replace("file://", "")
+  function helperCommand(kind, arguments) {
+    return ["/usr/bin/python3", "-I", "-S", "-B", supervisor, kind].concat(arguments)
+  }
   readonly property var obsCameraDevice: {
     const inputs = mediaDevices.videoInputs
     for (let index = 0; index < inputs.length; index += 1) {
@@ -117,7 +122,7 @@ Panel {
 
   function refreshObsState() {
     if (obsBackend !== "" && obsRunning && !obsStateProc.running) {
-      obsStateProc.command = ["python3", obsBackend, "state"]
+      obsStateProc.command = helperCommand("obs", ["state"])
       obsStateProc.running = true
     }
   }
@@ -137,6 +142,8 @@ Panel {
 
   function closePanel() {
     previewActive = false
+    framingProc.running = false
+    autoTemperatureProc.running = false
     root.close()
   }
 
@@ -161,14 +168,14 @@ Panel {
     else if (name === "sharpness") sharpness = Number(value)
     else if (name === "zoom_absolute") zoom = Number(value)
     statusText = "Applying…"
-    actionProc.command = ["python3", backend, "set", name, String(value)]
+    actionProc.command = helperCommand("backend", ["set", name, String(value)])
     actionProc.running = true
   }
 
   function resetControl(name) {
     if (!controllerAvailable || !hasDriverDefault(name) || actionProc.running) return
     statusText = "RESETTING " + String(name).replace(/_/g, " ").toUpperCase() + "…"
-    actionProc.command = ["python3", backend, "reset", name]
+    actionProc.command = helperCommand("backend", ["reset", name])
     actionProc.running = true
   }
 
@@ -177,21 +184,21 @@ Panel {
   }
 
   function startObs() {
-    if (!obsRunning) Quickshell.execDetached(["obs", "--startvirtualcam"])
+    if (!obsRunning) obsLaunchProc.startDetached()
   }
 
   function applySavedSettings() {
     if (!controllerAvailable || !connected || actionProc.running) return
     statusText = "APPLYING SAVED SETTINGS…"
-    actionProc.command = ["python3", backend, "apply"]
+    actionProc.command = helperCommand("backend", ["apply"])
     actionProc.running = true
   }
 
   function queuePan(dx, dy, previewWidth, previewHeight) {
-    pendingPanX += dx
-    pendingPanY += dy
-    panPreviewWidth = Math.max(1, previewWidth)
-    panPreviewHeight = Math.max(1, previewHeight)
+    pendingPanX = Math.max(-32768, Math.min(32768, pendingPanX + dx))
+    pendingPanY = Math.max(-32768, Math.min(32768, pendingPanY + dy))
+    panPreviewWidth = Math.max(1, Math.min(32768, previewWidth))
+    panPreviewHeight = Math.max(1, Math.min(32768, previewHeight))
     panTimer.restart()
   }
 
@@ -231,7 +238,8 @@ Panel {
     if (output === "") return
     framingBusy = false
     try {
-      const data = JSON.parse(output)
+      const data = Schema.obs(JSON.parse(output))
+      if (data.sequence !== undefined && data.sequence !== framingSequence) throw new Error("Unexpected framing sequence")
       framingReady = Boolean(data.connected)
       if (framingReady) {
         updateObsState(data)
@@ -261,6 +269,7 @@ Panel {
   }
 
   function updateObsState(data) {
+    Schema.obs(data)
     obsConnected = Boolean(data.connected)
     if (!obsConnected) {
       virtualCameraActive = false
@@ -279,6 +288,7 @@ Panel {
   }
 
   function updateState(data) {
+    Schema.state(data)
     const nextConnected = Boolean(data.connected)
     const nextObsRunning = Boolean(data.obs_running)
     const obsJustStarted = !obsRunning && nextObsRunning
@@ -344,6 +354,12 @@ Panel {
         previewActive: root.previewActive,
         obsRunning: root.obsRunning,
         useObsPreview: root.useObsPreview,
+        useDirectPreview: root.useDirectPreview,
+        controllerAvailable: root.controllerAvailable,
+        statusReady: root.statusReady,
+        statusText: root.statusText,
+        previewWidth: root.directPreviewWidth,
+        previewHeight: root.directPreviewHeight,
         framingProcess: framingProc.running,
         framingReady: root.framingReady,
         framingBusy: root.framingBusy,
@@ -353,14 +369,11 @@ Panel {
     }
   }
 
-  Process {
+  BoundedProcess {
     id: stateProc
-    command: ["python3", root.backend, "state"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        const output = String(text || "").trim()
-        if (output === "") {
+    command: root.helperCommand("backend", ["state"])
+    onCompleted: function(output, error, code) {
+        if (code !== 0 || output.trim() === "") {
           root.statusText = "RETRYING CAMERA STATUS…"
           reconnectDelay.restart()
           return
@@ -370,41 +383,46 @@ Panel {
           root.statusText = "COULD NOT READ CAMERA STATE"
           reconnectDelay.restart()
         }
-      }
     }
   }
 
-  Process {
+  BoundedProcess {
     id: framingProc
-    command: ["python3", root.obsBackend, "serve"]
+    command: root.helperCommand("obs", ["serve"])
+    streaming: true
     stdinEnabled: true
-    running: root.previewActive && root.obsRunning
-    stdout: SplitParser {
-      onRead: function(line) { root.handleFramingResponse(line) }
-    }
-    onStarted: {
-      root.framingReady = false
-      root.framingBusy = false
-    }
-    onExited: {
+    onLineReady: function(line) { root.handleFramingResponse(line) }
+    onCompleted: {
       root.framingReady = false
       root.framingBusy = false
       root.pendingPanX = 0
       root.pendingPanY = 0
+      if (root.previewActive && root.obsRunning) framingRestartTimer.restart()
     }
   }
 
-  Process {
+  BoundedProcess {
     id: obsStateProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        const output = String(text || "").trim()
-        if (output === "") return
+    onCompleted: function(output, error, code) {
+        if (code !== 0 || output.trim() === "") { root.obsConnected = false; return }
         try { root.updateObsState(JSON.parse(output)) }
         catch (error) { root.obsConnected = false }
-      }
     }
+  }
+
+  Timer {
+    id: framingRestartTimer
+    interval: 1500
+    onTriggered: if (root.previewActive && root.obsRunning && !framingProc.running) framingProc.running = true
+  }
+
+  Process {
+    id: obsLaunchProc
+    command: ["/usr/bin/obs", "--startvirtualcam"]
+    clearEnvironment: true
+    environment: ({ HOME: null, XDG_CONFIG_HOME: null, XDG_RUNTIME_DIR: null,
+                    DISPLAY: null, WAYLAND_DISPLAY: null, DBUS_SESSION_BUS_ADDRESS: null,
+                    PATH: "/usr/bin", LANG: "C.UTF-8" })
   }
 
   Timer {
@@ -445,7 +463,7 @@ Panel {
             root.directPreviewHeight = Number(resolution.height || 0)
           }
           onErrorOccurred: function(error, errorString) {
-            root.previewErrorText = error === Camera.NoError ? "" : String(errorString || "Camera preview unavailable")
+            root.previewErrorText = error === Camera.NoError ? "" : "Camera preview unavailable"
           }
         }
         videoOutput: previewOutput
@@ -453,33 +471,22 @@ Panel {
     }
   }
 
-  Process {
+  BoundedProcess {
     id: actionProc
-    stdout: StdioCollector { waitForEnd: true }
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var message = String(text || "").trim()
-        if (message !== "") root.statusText = message.toUpperCase()
-      }
+    onCompleted: function(output, error, code) {
+      if (code !== 0) root.statusText = "CAMERA ACTION FAILED · CHECK SETTINGS AND CONNECTION"
+      refreshDelay.restart()
     }
-    onRunningChanged: if (!running) refreshDelay.restart()
   }
 
-  Process {
+  BoundedProcess {
     id: autoTemperatureProc
-    command: ["python3", root.backend, "read", "white_balance_temperature"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        const output = String(text || "").trim()
-        if (output === "") return
+    command: root.helperCommand("backend", ["read", "white_balance_temperature"])
+    onCompleted: function(output, error, code) {
+        if (code !== 0 || output.trim() === "") return
         try {
-          const data = JSON.parse(output)
-          if (data.white_balance_temperature !== undefined)
-            root.temperature = Number(data.white_balance_temperature)
+          root.temperature = Schema.temperature(JSON.parse(output))
         } catch (error) {}
-      }
     }
   }
 
@@ -520,7 +527,23 @@ Panel {
   }
 
   Component.onCompleted: refresh()
+  Component.onDestruction: {
+    root.previewActive = false
+    stateProc.running = false
+    actionProc.running = false
+    obsStateProc.running = false
+    autoTemperatureProc.running = false
+    framingProc.running = false
+  }
   onOpenedChanged: root.previewActive = root.opened
+  onPreviewActiveChanged: {
+    if (previewActive && obsRunning) framingRestartTimer.restart()
+    else framingProc.running = false
+  }
+  onObsRunningChanged: {
+    if (previewActive && obsRunning) framingRestartTimer.restart()
+    else framingProc.running = false
+  }
 
   // Expose the bar slot size to Omarchy's widget loader. Without these
   // implicit dimensions the panel works over IPC, but its icon collapses to
@@ -573,7 +596,7 @@ Panel {
           PanelHero {
             width: parent.width
             title: "Anker PowerConf C200"
-            meta: root.statusText
+            meta: Schema.label(root.statusText)
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
             iconOpacity: root.connected ? 1.0 : 0.45
@@ -657,6 +680,7 @@ Panel {
 
               Text {
                 anchors.centerIn: parent
+                textFormat: Text.PlainText
                 visible: !root.previewAvailable || root.previewErrorText !== ""
                 text: root.previewErrorText !== "" ? root.previewErrorText.toUpperCase()
                   : (root.obsRunning ? "START OBS VIRTUAL CAMERA" : "ANKER CAMERA NOT FOUND")
@@ -710,6 +734,7 @@ Panel {
             Text {
               width: parent.width
               text: root.useDirectPreview ? "DIRECT PREVIEW · START OBS TO REFRAME" : root.framingStatus
+              textFormat: Text.PlainText
               color: Qt.darker(root.bar.foreground, 1.35)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -719,6 +744,7 @@ Panel {
             Text {
               width: parent.width
               text: root.modeDetails
+              textFormat: Text.PlainText
               color: Qt.darker(root.bar.foreground, 1.35)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -727,6 +753,7 @@ Panel {
 
             Text {
               visible: text !== ""
+              textFormat: Text.PlainText
               width: parent.width
               text: root.cropDetails
               color: Qt.darker(root.bar.foreground, 1.35)
@@ -737,6 +764,7 @@ Panel {
 
             Text {
               visible: root.busyProcesses.length > 0 && !root.obsRunning
+              textFormat: Text.PlainText
               width: parent.width
               text: root.busyProcesses.length > 0
                 ? "PHYSICAL CAMERA HELD BY " + String(root.busyProcesses[0].name).toUpperCase()

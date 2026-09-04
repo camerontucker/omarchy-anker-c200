@@ -54,11 +54,22 @@ omarchy plugin add https://github.com/camerontucker/omarchy-anker-c200.git --ena
 That is the complete required setup. On first use, the plugin compiles the
 pinned, bundled
 [`anker-powerconf-c200-linux-tools`](https://github.com/erans/anker-powerconf-c200-linux-tools)
-source into `$XDG_CACHE_HOME/anker-c200/bin/anker-c200`. It performs no network
+source into a private cache under `$XDG_CACHE_HOME/anker-c200`. It performs no network
 download, asks for no elevated privileges, and does not invoke a package
-manager. An existing `anker-c200` executable in `PATH` or `~/.local/bin` takes
-precedence. If local compilation is unavailable, the panel reports the setup
+manager. Only the bundled, SHA-256-pinned source is supported: executables in
+`PATH` or `~/.local/bin` are never used. The compiler is `/usr/bin/cc`, with a
+clean environment. Cache artifacts are digest-checked and executed through an
+immutable sealed memory descriptor, never by reopening a cache pathname.
+If local compilation is unavailable, the panel reports the setup
 error and continues in preview-only mode.
+
+Settings and cache paths must have user-owned, non-symlink parents that are not
+group/world writable. New plugin data uses private directories and mode-0600
+files. OBS's credential file must be a user-owned mode-0600 regular file;
+unsafe files are rejected without reading or changing their contents. Helper
+requests have byte limits and hard deadlines, and their process trees are
+terminated and reaped when the panel component is destroyed. A failed framing
+helper reconnects automatically while the preview remains open.
 
 For local development, install from a checkout instead:
 
