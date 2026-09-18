@@ -19,7 +19,7 @@ class ReleaseContractTests(unittest.TestCase):
         manifest = self.manifest
         self.assertEqual(manifest["schemaVersion"], 1)
         self.assertEqual(manifest["id"], "io.github.camerontucker.anker-c200")
-        self.assertEqual(manifest["version"], "1.2.1")
+        self.assertEqual(manifest["version"], "1.2.2")
         self.assertEqual(manifest["license"], "MIT")
         self.assertEqual(manifest["kinds"], ["bar-widget"])
         self.assertEqual(manifest["entryPoints"], {"barWidget": "Panel.qml"})
@@ -134,6 +134,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("property bool statusReady: false", qml)
         self.assertIn("id: previewCaptureLoader", qml)
         self.assertIn("active: root.previewActive && root.previewAvailable", qml)
+        self.assertIn("OBS feed is in use by another app", qml)
         self.assertIn("function closePanel()", qml)
         self.assertIn("previewActive = false", qml)
         self.assertIn("preventStealing: true", qml)

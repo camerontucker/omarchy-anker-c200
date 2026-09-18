@@ -360,6 +360,7 @@ Panel {
         statusText: root.statusText,
         previewWidth: root.directPreviewWidth,
         previewHeight: root.directPreviewHeight,
+        previewErrorText: root.previewErrorText,
         framingProcess: framingProc.running,
         framingReady: root.framingReady,
         framingBusy: root.framingBusy,
@@ -463,7 +464,9 @@ Panel {
             root.directPreviewHeight = Number(resolution.height || 0)
           }
           onErrorOccurred: function(error, errorString) {
-            root.previewErrorText = error === Camera.NoError ? "" : "Camera preview unavailable"
+            if (error === Camera.NoError) root.previewErrorText = ""
+            else if (root.useObsPreview) root.previewErrorText = "OBS feed is in use by another app"
+            else root.previewErrorText = "Camera preview unavailable"
           }
         }
         videoOutput: previewOutput

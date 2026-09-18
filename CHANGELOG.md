@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2 — 2026-09-18
+
+- Explain when another application has made the OBS Virtual Camera preview
+  unavailable instead of showing a generic camera error.
+- Expose the current preview error in plugin diagnostics.
+
 ## 1.2.1 — 2026-09-03
 
 - Bind helpers to system executables and execute only the digest-validated
